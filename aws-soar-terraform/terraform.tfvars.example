@@ -1,0 +1,70 @@
+# terraform.tfvars.example
+# 이 파일을 terraform.tfvars 로 복사해서 값을 채우세요.
+# terraform.tfvars 는 .gitignore에 들어 있습니다(공인 IP가 들어가므로).
+
+###############################################################################
+# 필수
+###############################################################################
+
+# 팀 사무실이나 본인 공인 IP. `curl ifconfig.me` 로 확인한 뒤 /32 를 붙이세요.
+# DVWA 같은 취약한 앱을 여기로만 열기 때문에 정확히 넣어야 합니다.
+admin_cidr = "203.0.113.45/32"
+
+###############################################################################
+# 기본값을 바꾸고 싶을 때
+###############################################################################
+
+project     = "aws-secops"
+environment = "lab"
+region      = "ap-northeast-2"
+
+# EC2 키페어 이름. 비워두면 SSM Session Manager로만 접속합니다(키 관리가 없어 더 안전).
+# key_name = "my-keypair"
+
+instance_type = "t3.micro"
+
+###############################################################################
+# 비용 토글 — 기본은 전부 off
+#
+# 최초 apply 절차:
+#   1) enable_nat_gateway = true 로 apply  (Private 인스턴스 부트스트랩)
+#   2) 인스턴스 준비가 끝나면 false 로 되돌리고 다시 apply
+###############################################################################
+
+enable_nat_gateway = false
+enable_alb         = false
+enable_waf         = false
+
+###############################################################################
+# 탐지 서비스 (SIEM)
+###############################################################################
+
+enable_guardduty       = true
+enable_inspector       = true
+enable_config          = true
+enable_security_hub    = true
+enable_access_analyzer = true
+enable_cloudtrail      = true
+
+inspector_resource_types = ["EC2", "ECR"]
+
+# GuardDuty 추가 기능은 전부 별도 과금이라 기본은 비어 있습니다.
+# 발표에서 "GuardDuty AI Protection까지 봤다"를 보여주려면 아래 주석을 푸세요.
+# guardduty_optional_features = [
+#   { name = "AI_PROTECTION" },
+#   { name = "RUNTIME_MONITORING" },
+# ]
+
+###############################################################################
+# SOAR / NMS
+###############################################################################
+
+# false면 Lambda가 판단까지만 하고 실제 SSM 실행은 하지 않습니다(시연 리허설용).
+enable_auto_remediation = true
+
+# apply 후 확인 메일의 링크를 눌러야 알림이 옵니다.
+# alert_email = "team@example.com"
+
+cpu_threshold            = 80
+mem_threshold            = 80
+alarm_evaluation_periods = 5

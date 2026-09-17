@@ -1,0 +1,22 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# 공인 IP / 이메일 등 팀 고유 값이 들어갑니다. 절대 커밋하지 마세요.
+terraform.tfvars
+*.auto.tfvars
+
+# plan 파일에는 평문 값이 들어갈 수 있습니다.
+*.tfplan
+
+# Lambda 빌드 산출물
+modules/soar/.build/
+
+# 에디터
+.vscode/
+.idea/
+.DS_Store
