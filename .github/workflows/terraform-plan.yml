@@ -69,7 +69,7 @@ jobs:
           terraform_version: 1.9.8
 
       - name: init
-        run: terraform init -backend-config=backend.hcl -input=false
+        run: terraform init -input=false
 
       - name: fmt
         run: terraform fmt -check -recursive
