@@ -39,6 +39,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # OIDC sub 값 확인용. 인증이 되면 지워도 됩니다.
+      - name: OIDC 신원 확인
+        run: |
+          echo "GITHUB_REPOSITORY = $GITHUB_REPOSITORY"
+          echo "GITHUB_REF        = $GITHUB_REF"
+          echo "GITHUB_EVENT_NAME = $GITHUB_EVENT_NAME"
+          echo "기대하는 sub      = repo:$GITHUB_REPOSITORY:ref:$GITHUB_REF"
+
       - name: admin_cidr 확인
         run: |
           if [ -z "$TF_VAR_admin_cidr" ]; then
