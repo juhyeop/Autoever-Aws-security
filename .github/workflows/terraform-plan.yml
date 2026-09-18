@@ -5,10 +5,10 @@ name: terraform plan
 # 앞의 두 단계를 자동화하고, 마지막 apply 는 사람에게 남겨둔 형태입니다.
 on:
   pull_request:
-    paths: ['**.tf', '**.tftpl', '.github/workflows/terraform-plan.yml']
+    paths: ['aws-soar-terraform/**.tf', 'aws-soar-terraform/**.tftpl', '.github/workflows/terraform-plan.yml']
   push:
     branches: [main]
-    paths: ['**.tf', '**.tftpl']
+    paths: ['aws-soar-terraform/**.tf', 'aws-soar-terraform/**.tftpl']
   workflow_dispatch:
 
 permissions:
@@ -32,6 +32,10 @@ concurrency:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    # terraform 파일이 저장소 루트가 아니라 하위 폴더에 있습니다.
+    defaults:
+      run:
+        working-directory: aws-soar-terraform
     steps:
       - uses: actions/checkout@v4
 
@@ -75,7 +79,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            let plan = fs.readFileSync('plan.txt', 'utf8');
+            let plan = fs.readFileSync('aws-soar-terraform/plan.txt', 'utf8');
             // 코멘트 길이 제한(65536)에 걸리지 않게 자릅니다.
             const max = 60000;
             if (plan.length > max) {
@@ -108,6 +112,6 @@ jobs:
         with:
           name: tfplan-${{ github.sha }}
           path: |
-            tfplan
-            plan.txt
+            aws-soar-terraform/tfplan
+            aws-soar-terraform/plan.txt
           retention-days: 14
