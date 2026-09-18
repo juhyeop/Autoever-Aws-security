@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+ <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+ <meta name="theme-color" content="#141616"><meta name="description" content="AWS 보안 탐지, 대응, 재검증을 확인하는 데모 관제 대시보드">
+ <title>AWS Security Operations · 통합 관제</title>
+ <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+ <link rel="stylesheet" href="/static/css/tailwind.css">
+ <link rel="stylesheet" href="/static/css/app.css">
+ <script defer src="/static/vendor/chart.umd.js"></script>
+ <script type="module" src="/static/js/app.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main">본문으로 이동</a>
+<header class="topbar flex items-center justify-between">
+ <a class="brand flex items-center gap-3" href="/"><svg width="24" height="28" viewBox="0 0 24 28" fill="none" aria-hidden="true"><path d="M12 2 22 6v8c0 6-10 12-10 12S2 20 2 14V6Z" stroke="currentColor" stroke-width="1.5"/><path d="m7 13 3 3 7-7" stroke="currentColor" stroke-width="1.5"/></svg><span>AWS <strong>Security Operations</strong></span></a>
+ <div class="top-controls flex items-center gap-3"><span class="demo-dot">데모 데이터</span><label class="sr-only" for="environment">환경</label><select id="environment"><option value="production">Production</option><option value="staging">Staging</option></select><span class="connection">AWS 미연동</span><button id="notifications" class="icon-button" aria-label="알림 보기"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span id="notification-count" class="notification-dot"></span></button><span class="avatar" aria-label="관제 담당자">OP</span></div>
+</header>
+<aside class="sidebar">
+ <div class="workspace-label">WORKSPACE <span>01</span></div>
+ <nav aria-label="주 메뉴">
+  <button data-view="overview" class="active"><span>▦</span>통합 관제</button>
+  <button data-view="events"><span>◎</span>보안 이벤트</button>
+  <button data-view="vulnerabilities"><span>◇</span>취약점 점검</button>
+  <button data-view="infrastructure"><span>▥</span>인프라 모니터링</button>
+  <button data-view="responses"><span>↻</span>대응 이력</button>
+ </nav>
+ <div class="sidebar-bottom"><span class="status-dot"></span>데모 환경 정상<div>실제 AWS 연결 없음</div><small>SECURITY CONSOLE / 01</small></div>
+</aside>
+<main id="main" tabindex="-1">
+ <section class="page-heading flex items-center justify-between gap-3"><div><div class="eyebrow">SECURITY OPERATIONS CENTER</div><h1 id="page-title">통합 관제 <span>Overview</span></h1></div><div class="refresh-group"><span id="updated">갱신 대기</span><button id="refresh" class="subtle-button">↻ 새로고침</button></div></section>
+ <div id="load-state" class="load-state" role="status" hidden></div>
+ <section class="filters flex items-center gap-2" aria-label="데이터 필터">
+  <label class="sr-only" for="region">리전</label><select id="region"></select>
+  <label class="sr-only" for="severity">위험도</label><select id="severity"><option value="">모든 위험도</option><option value="Critical">Critical</option><option>High</option><option>Medium</option><option>Low</option></select>
+  <label class="sr-only" for="status">처리 상태</label><select id="status"><option value="">모든 상태</option></select>
+  <label class="sr-only" for="source">탐지 소스</label><select id="source"><option value="">모든 탐지 소스</option></select>
+  <div class="search-wrap"><span aria-hidden="true">⌕</span><label class="sr-only" for="search">이벤트 검색</label><input id="search" type="search" placeholder="이벤트, 자원 ID 검색" autocomplete="off"></div>
+  <button id="clear-filters" class="text-button">초기화</button>
+ </section>
+ <section id="map-section" class="panel map-section">
+  <div class="map-heading"><h2><span class="status-dot"></span> 리전별 탐지 현황</h2><span>REGIONAL THREAT OVERVIEW</span></div>
+  <div class="map-stage">
+   <div class="map-canvas" id="map-canvas"><svg id="world-map" viewBox="0 0 1000 460" role="group" aria-label="AWS 리전별 이벤트 지도"><defs><pattern id="grid" width="62.5" height="57.5" patternUnits="userSpaceOnUse"><path d="M 62.5 0 L 0 0 0 57.5" fill="none" stroke="#263130" stroke-width=".5"/></pattern><radialGradient id="glow"><stop stop-color="#32D4BE" stop-opacity=".12"/><stop offset="1" stop-color="#32D4BE" stop-opacity="0"/></radialGradient></defs><rect width="1000" height="460" fill="url(#grid)"/><g id="map-transform"><g id="countries"></g><g id="markers"></g></g></svg>
+    <div class="map-label map-label-ocean">PACIFIC OCEAN</div><div class="map-controls"><button id="zoom-in" aria-label="지도 확대">+</button><button id="zoom-out" aria-label="지도 축소">−</button><button id="zoom-reset" aria-label="지도 초기화">⌖</button></div>
+    <div class="map-legend"><span class="mint-dot"></span>원 크기: 탐지 건수 <span class="legend-separator">/</span> 위치: AWS 리전 <a href="https://www.naturalearthdata.com/about/terms-of-use/" target="_blank" rel="noreferrer">Natural Earth</a></div>
+    <button id="open-region" class="subtle-button open-region" hidden>지역 상세 열기 →</button>
+   </div>
+   <aside id="region-panel" aria-label="선택 지역 상세"></aside>
+  </div>
+ </section>
+ <section class="timeline panel" aria-label="시간 범위">
+  <div class="time-presets flex items-center gap-1"><span class="muted">기간</span><button data-hours="1">1시간</button><button data-hours="6">6시간</button><button data-hours="24" class="active">24시간</button><button data-hours="168">7일</button></div>
+  <div class="range-wrap"><label for="time-range" class="sr-only">종료 시각을 과거로 이동 (시간 전)</label><input id="time-range" type="range" min="0" max="144" step="1" value="0" dir="rtl"><div class="range-labels"><span>6일 전</span><span>3일 전</span><span>데모 기준 시각</span></div></div>
+  <div id="time-label" class="time-label"></div>
+ </section>
+ <div id="content"></div>
+ <footer class="main-footer"><span><span class="status-dot"></span> DEMO MODE <span class="footer-divider">/</span> 모든 조치는 시뮬레이션입니다.</span><span>기준 데이터 2026.09.18 15:00 KST</span></footer>
+</main>
+<dialog id="event-dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+</body></html>
+
+
