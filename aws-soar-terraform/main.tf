@@ -1,82 +1,163 @@
-###############################################################################
-# AWS 기반 SOAR / SIEM / NMS 보안 관제 — 루트 모듈
-#
-# 설계문서: claude/soar-siem-nms-dashboard-architecture.md (v7)
-#
-#   network   VPC · 3개 서브넷 · SG · NACL · VPC Flow Logs
-#   compute   EC2 5대 (DVWA / MySQL 수동·자동 / Docker / 대시보드) · ALB+WAF(옵션)
-#   security  GuardDuty · Inspector · Config · Access Analyzer · Security Hub · CloudTrail
-#   soar      EventBridge · Lambda 2개 · SSM Automation · SNS · CloudWatch 알람
-###############################################################################
+############################################
+# 루트 — 모듈이 공유하는 이름은 여기서 먼저 확정합니다.
+# (모듈 간 순환 참조 방지: soar 가 만드는 리소스의 '이름'을 compute 도
+#  참조해야 하므로, 이름은 루트 locals 에서 정하고 생성만 각 모듈이 맡습니다.)
+############################################
+
+locals {
+  name_prefix = "${var.project}-${var.env}"
+  account_id  = data.aws_caller_identity.current.account_id
+  region      = data.aws_region.current.region
+  partition   = data.aws_partition.current.partition
+
+  # 관리자 CIDR. admin_cidr 가 비었을 때만 실행 PC 공인 IP/32 를 자동 감지합니다.
+  admin_cidr = var.admin_cidr != "" ? var.admin_cidr : "${chomp(data.http.my_ip[0].response_body)}/32"
+
+  log_group_nginx    = "/${var.project}/${var.env}/web/nginx"
+  log_group_mysql    = "/${var.project}/${var.env}/db/mysql"
+  log_group_flowlogs = "/${var.project}/${var.env}/vpc/flowlogs"
+
+  correlated_findings_table = "${local.name_prefix}-correlated-findings"
+  remediation_actions_table = "${local.name_prefix}-remediation-actions"
+  scan_results_bucket       = "${local.name_prefix}-scan-results-${local.account_id}"
+
+  # SSM Automation 역할 이름 — compute(대시보드 PassRole 범위)와 soar 가 공유
+  ssm_automation_role_name = "${local.name_prefix}-ssm-automation-role"
+
+  # SNS 토픽 ARN 을 이름으로 조립합니다. compute -> soar 순환 참조를 끊기 위함
+  # (soar 가 이 이름 그대로 토픽을 생성합니다).
+  sns_topic_arn = "arn:${local.partition}:sns:${local.region}:${local.account_id}:${local.name_prefix}-alerts"
+
+  common_tags = {
+    Project = var.project
+    Env     = var.env
+  }
+}
 
 module "network" {
   source = "./modules/network"
 
-  name_prefix               = local.name_prefix
-  vpc_cidr                  = var.vpc_cidr
-  availability_zone         = var.availability_zone
-  public_web_subnet_cidr    = var.public_web_subnet_cidr
-  private_db_subnet_cidr    = var.private_db_subnet_cidr
-  private_app_subnet_cidr   = var.private_app_subnet_cidr
-  alb_secondary_subnet_cidr = var.alb_secondary_subnet_cidr
-  admin_cidr                = var.admin_cidr
-  enable_nat_gateway        = var.enable_nat_gateway
-  enable_alb                = var.enable_alb
-}
+  name_prefix        = local.name_prefix
+  region             = local.region
+  vpc_cidr           = var.vpc_cidr
+  az_primary         = var.az_primary
+  az_secondary       = var.az_secondary
+  subnet_cidrs       = var.subnet_cidrs
+  admin_cidr         = local.admin_cidr
+  log_group_flowlogs = local.log_group_flowlogs
+  log_retention_days = var.log_retention_days
 
-module "compute" {
-  source = "./modules/compute"
+  enable_nat_gateway       = var.enable_nat_gateway
+  enable_vpc_endpoints     = var.enable_vpc_endpoints
+  enable_alb               = var.enable_alb
+  enable_flow_logs         = var.enable_flow_logs
+  enable_dvwa_instance     = var.enable_dvwa_instance
+  enable_attacker_instance = var.enable_attacker_instance
 
-  name_prefix      = local.name_prefix
-  instance_type    = var.instance_type
-  key_name         = var.key_name
-  root_volume_size = var.root_volume_size
-
-  vpc_id                = module.network.vpc_id
-  public_web_subnet_id  = module.network.public_web_subnet_id
-  private_db_subnet_id  = module.network.private_db_subnet_id
-  private_app_subnet_id = module.network.private_app_subnet_id
-  alb_subnet_ids        = module.network.alb_subnet_ids
-
-  web_security_group_id          = module.network.web_security_group_id
-  mysql_manual_security_group_id = module.network.mysql_manual_security_group_id
-  mysql_auto_security_group_id   = module.network.mysql_auto_security_group_id
-  app_security_group_id          = module.network.app_security_group_id
-  alb_security_group_id          = module.network.alb_security_group_id
-
-  enable_alb = var.enable_alb
-  enable_waf = var.enable_waf
-
-  cpu_threshold = var.cpu_threshold
-  mem_threshold = var.mem_threshold
+  tags = local.common_tags
 }
 
 module "security" {
   source = "./modules/security"
 
   name_prefix = local.name_prefix
+  region      = local.region
+  account_id  = local.account_id
+  partition   = local.partition
 
-  enable_guardduty            = var.enable_guardduty
-  guardduty_optional_features = var.guardduty_optional_features
-  enable_inspector            = var.enable_inspector
-  inspector_resource_types    = var.inspector_resource_types
-  enable_config               = var.enable_config
-  enable_security_hub         = var.enable_security_hub
-  enable_access_analyzer      = var.enable_access_analyzer
-  enable_cloudtrail           = var.enable_cloudtrail
+  enable_guardduty               = var.enable_guardduty
+  enable_guardduty_ai_protection = var.enable_guardduty_ai_protection
+  enable_inspector2              = var.enable_inspector2
+  enable_config                  = var.enable_config
+  enable_security_hub            = var.enable_security_hub
+  enable_access_analyzer         = var.enable_access_analyzer
+  enable_cloudtrail              = var.enable_cloudtrail
+  log_retention_days             = var.log_retention_days
+
+  tags = local.common_tags
 }
 
 module "soar" {
   source = "./modules/soar"
 
-  name_prefix              = local.name_prefix
-  monitored_instance_ids   = module.compute.all_instance_ids
-  enable_auto_remediation  = var.enable_auto_remediation
-  alert_email              = var.alert_email
-  cpu_threshold            = var.cpu_threshold
-  mem_threshold            = var.mem_threshold
-  alarm_evaluation_periods = var.alarm_evaluation_periods
+  name_prefix = local.name_prefix
+  region      = local.region
+  account_id  = local.account_id
+  partition   = local.partition
 
-  # SOAR는 Security Hub가 켜져 있어야 finding을 받습니다.
-  depends_on = [module.security]
+  log_group_nginx    = local.log_group_nginx
+  log_group_mysql    = local.log_group_mysql
+  log_group_flowlogs = local.log_group_flowlogs
+  log_retention_days = var.log_retention_days
+
+  correlated_findings_table = local.correlated_findings_table
+  remediation_actions_table = local.remediation_actions_table
+  scan_results_bucket       = local.scan_results_bucket
+
+  enable_auto_remediation  = var.enable_auto_remediation
+  auto_remediable_patterns = var.auto_remediable_patterns
+  alert_email              = var.alert_email
+
+  enable_guardduty    = var.enable_guardduty
+  enable_security_hub = var.enable_security_hub
+  enable_config       = var.enable_config
+  enable_flow_logs    = var.enable_flow_logs
+
+  cpu_alarm_threshold       = var.cpu_alarm_threshold
+  memory_alarm_threshold    = var.memory_alarm_threshold
+  mysql_auth_fail_threshold = var.mysql_auth_fail_threshold
+
+  monitored_instances  = module.compute.monitored_instances
+  db_security_group_id = module.network.sg_db_manual_id
+  public_nacl_id       = module.network.private_nacl_id
+
+  tags = local.common_tags
+}
+
+module "compute" {
+  source = "./modules/compute"
+
+  name_prefix = local.name_prefix
+  region      = local.region
+  account_id  = local.account_id
+  partition   = local.partition
+
+  vpc_id                = module.network.vpc_id
+  public_subnet_ids     = module.network.public_subnet_ids
+  public_web_subnet_id  = module.network.public_web_subnet_id
+  private_app_subnet_id = module.network.private_app_subnet_id
+  private_db_subnet_id  = module.network.private_db_subnet_id
+
+  sg_alb_id         = module.network.sg_alb_id
+  sg_docker_host_id = module.network.sg_docker_host_id
+  sg_dashboard_id   = module.network.sg_dashboard_id
+  sg_web_dvwa_id    = module.network.sg_web_dvwa_id
+  sg_db_auto_id     = module.network.sg_db_auto_id
+  sg_db_manual_id   = module.network.sg_db_manual_id
+  sg_attacker_id    = module.network.sg_attacker_id
+
+  instance_type             = var.instance_type
+  docker_host_instance_type = var.docker_host_instance_type
+  db_instance_type          = var.db_instance_type
+  db_name                   = var.db_name
+  db_app_user               = var.db_app_user
+  mysql_root_password       = var.mysql_root_password
+  mysql_app_password        = var.mysql_app_password
+
+  enable_alb               = var.enable_alb
+  enable_waf               = var.enable_waf
+  enable_dvwa_instance     = var.enable_dvwa_instance
+  enable_attacker_instance = var.enable_attacker_instance
+
+  log_group_nginx = local.log_group_nginx
+  log_group_mysql = local.log_group_mysql
+
+  correlated_findings_table = local.correlated_findings_table
+  remediation_actions_table = local.remediation_actions_table
+  scan_results_bucket       = local.scan_results_bucket
+
+  ssm_automation_role_name = local.ssm_automation_role_name
+  sns_topic_arn            = local.sns_topic_arn
+
+  tags = local.common_tags
 }

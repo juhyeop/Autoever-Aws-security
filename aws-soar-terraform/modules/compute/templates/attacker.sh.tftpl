@@ -1,0 +1,16 @@
+#!/bin/bash
+# 내부 점검/공격 재현용 호스트 (옵션). 팀 소유 격리 VPC 에서만 사용.
+# 이 스크립트는 기본 도구만 준비합니다. 실제 점검 도구와 시나리오는
+# 팀이 승인 범위 안에서 직접 설치·실행하고, 결과는 S3(${scan_results_bucket})에 보관합니다.
+# 로그: /var/log/user-data.log
+set -euxo pipefail
+exec > >(tee -a /var/log/user-data.log) 2>&1
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y ca-certificates curl unzip jq
+
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+unzip -oq /tmp/awscliv2.zip -d /tmp && /tmp/aws/install --update
+
+echo "attacker host ready (base only). 점검 도구는 팀이 승인 후 직접 설치."

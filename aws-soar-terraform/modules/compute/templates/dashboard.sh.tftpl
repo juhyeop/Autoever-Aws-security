@@ -1,0 +1,29 @@
+#!/bin/bash
+# SOAR 보안 대시보드 (Flask) 배치용 호스트
+# 로그: /var/log/user-data.log
+set -euxo pipefail
+exec > >(tee -a /var/log/user-data.log) 2>&1
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y ca-certificates curl unzip jq python3-pip python3-venv
+
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+unzip -oq /tmp/awscliv2.zip -d /tmp && /tmp/aws/install --update
+
+# 대시보드 코드가 참조할 리소스 이름을 환경파일로 남깁니다.
+mkdir -p /opt/dashboard
+cat > /opt/dashboard/dashboard.env <<ENVEOF
+AWS_REGION=${region}
+CORRELATED_FINDINGS_TABLE=${correlated_findings_table}
+REMEDIATION_ACTIONS_TABLE=${remediation_actions_table}
+SCAN_RESULTS_BUCKET=${scan_results_bucket}
+SNS_TOPIC_ARN=${sns_topic_arn}
+ENVEOF
+
+python3 -m venv /opt/dashboard/venv
+/opt/dashboard/venv/bin/pip install --upgrade pip
+/opt/dashboard/venv/bin/pip install flask flask-login sqlalchemy boto3 gunicorn
+
+echo "dashboard host ready. 팀의 Flask 대시보드 코드를 /opt/dashboard 에 배포한 뒤"
+echo "gunicorn 으로 5000 포트에 기동하고, SSM 포트포워딩으로 접속합니다."

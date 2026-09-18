@@ -1,0 +1,15 @@
+#!/bin/bash
+# DVWA - 웹 취약점 시연 대상 (SEC-08). 팀 소유 격리 VPC 에서만 사용.
+# 로그: /var/log/user-data.log
+set -euxo pipefail
+exec > >(tee -a /var/log/user-data.log) 2>&1
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y ca-certificates curl unzip jq docker.io
+systemctl enable --now docker
+
+# 공식 교육용 DVWA 컨테이너. 반드시 관리자 IP / ALB 뒤에서만 노출합니다.
+docker run -d --restart unless-stopped -p 80:80 --name dvwa vulnerables/web-dvwa:latest
+
+echo "web-dvwa user-data done. 외부 0.0.0.0/0 노출 금지 - SG 로 관리자 IP·ALB 만 허용."

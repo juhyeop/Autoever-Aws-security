@@ -1,29 +1,31 @@
-output "sns_topic_arn" {
-  value = aws_sns_topic.alerts.arn
+output "correlated_findings_table_name" { value = aws_dynamodb_table.correlated.name }
+output "remediation_actions_table_name" { value = aws_dynamodb_table.actions.name }
+output "scan_results_bucket" { value = aws_s3_bucket.scan.id }
+output "sns_topic_arn" { value = aws_sns_topic.alerts.arn }
+
+output "ssm_automation_role_name" { value = aws_iam_role.ssm_automation.name }
+output "ssm_automation_role_arn" { value = aws_iam_role.ssm_automation.arn }
+
+output "correlator_function_name" { value = aws_lambda_function.correlator.function_name }
+output "asr_trigger_function_name" { value = aws_lambda_function.asr_trigger.function_name }
+
+output "ssm_playbooks" {
+  description = "SSM Automation 문서 (자동개선/수동개선)"
+  value = {
+    auto_revoke_sg       = aws_ssm_document.automation["ASR-RevokeSecurityGroupIngress"].name
+    auto_disable_key     = aws_ssm_document.automation["ASR-DisableExposedAccessKey"].name
+    manual_block_ip      = aws_ssm_document.automation["ASR-BlockIpWithNacl"].name
+    manual_rotate_secret = aws_ssm_document.automation["ASR-RotateDbSecret"].name
+    auto_harden_nginx    = aws_ssm_document.command["ASR-HardenNginx"].name
+  }
 }
 
-output "correlator_function_name" {
-  value = aws_lambda_function.correlator.function_name
+output "manual_scan_document" {
+  description = "수동 모니터링 실행용 SSM Run Command 문서"
+  value = {
+    port_and_web    = aws_ssm_document.command["SCAN-PortAndWeb"].name
+    container_image = aws_ssm_document.command["SCAN-ContainerImage"].name
+  }
 }
 
-output "asr_trigger_function_name" {
-  value = aws_lambda_function.asr_trigger.function_name
-}
-
-output "automation_document_name" {
-  description = "대시보드 config.py 의 ALLOWED_AUTOMATION_DOCUMENTS 에 넣을 문서 이름."
-  value       = aws_ssm_document.revoke_open_ingress.name
-}
-
-output "automation_role_arn" {
-  value = aws_iam_role.automation.arn
-}
-
-output "correlated_findings_table" {
-  description = "대시보드가 상관분석 결과를 읽어갈 DynamoDB 테이블."
-  value       = aws_dynamodb_table.correlated_findings.name
-}
-
-output "cloudwatch_dashboard_name" {
-  value = aws_cloudwatch_dashboard.nms.dashboard_name
-}
+output "cloudwatch_dashboard_name" { value = aws_cloudwatch_dashboard.main.dashboard_name }

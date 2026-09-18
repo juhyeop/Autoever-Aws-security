@@ -1,0 +1,14 @@
+# 원격 state 설정 (부분 구성). backend.hcl 로 복사해서 값을 채운 뒤:
+#
+#   cd bootstrap && terraform init && terraform apply   # 버킷/잠금테이블 생성
+#   cd ..
+#   # backend.tf 의 terraform{} 블록 주석 해제 (값은 여기서 주입하므로 비워둬도 됨)
+#   terraform init -backend-config=backend.hcl -migrate-state
+#
+# backend.hcl 은 계정 ID가 들어가므로 .gitignore 대상입니다.
+
+bucket         = "aws-secops-lab-tfstate-000000000000"  # bootstrap 출력 state_bucket_name
+key            = "soar-siem-nms/terraform.tfstate"
+region         = "ap-northeast-2"
+dynamodb_table = "aws-secops-lab-tflock"                # bootstrap 출력 lock_table_name
+encrypt        = true

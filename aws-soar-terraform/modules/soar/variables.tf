@@ -1,43 +1,38 @@
-variable "name_prefix" {
-  type = string
-}
+variable "name_prefix" { type = string }
+variable "region" { type = string }
+variable "account_id" { type = string }
+variable "partition" { type = string }
 
-variable "monitored_instance_ids" {
-  description = "CPU/Mem 알람을 붙일 인스턴스. key는 알람 이름에 쓰입니다."
-  type        = map(string)
-}
+variable "log_group_nginx" { type = string }
+variable "log_group_mysql" { type = string }
+variable "log_group_flowlogs" { type = string }
+variable "log_retention_days" { type = number }
 
-variable "enable_auto_remediation" {
-  description = "false면 Lambda가 판단만 하고 SSM 실행은 하지 않습니다(dry-run)."
-  type        = bool
-  default     = true
-}
+variable "correlated_findings_table" { type = string }
+variable "remediation_actions_table" { type = string }
+variable "scan_results_bucket" { type = string }
 
-variable "reimport_to_security_hub" {
-  description = "상관분석 결과를 Security Hub에 커스텀 finding으로 재게시할지 여부."
-  type        = bool
-  default     = true
-}
+variable "enable_auto_remediation" { type = bool }
+variable "auto_remediable_patterns" { type = list(string) }
+variable "alert_email" { type = string }
 
-variable "automation_document_prefix" {
-  description = "SSM Automation 문서 이름 접두사. 최소권한 IAM 정책의 범위와 맞춰야 합니다."
+variable "enable_guardduty" { type = bool }
+variable "enable_security_hub" { type = bool }
+variable "enable_config" { type = bool }
+variable "enable_flow_logs" { type = bool }
+
+variable "cpu_alarm_threshold" { type = number }
+variable "memory_alarm_threshold" { type = number }
+variable "mysql_auth_fail_threshold" { type = number }
+
+variable "monitored_instances" { type = map(string) }
+variable "db_security_group_id" {
+  description = "db-manual-sg — SEC-06 수동 NACL 차단 시연 시 참고"
   type        = string
-  default     = "ASR-"
 }
+variable "public_nacl_id" { type = string }
 
-variable "alert_email" {
-  type    = string
-  default = null
-}
-
-variable "cpu_threshold" {
-  type = number
-}
-
-variable "mem_threshold" {
-  type = number
-}
-
-variable "alarm_evaluation_periods" {
-  type = number
+variable "tags" {
+  type    = map(string)
+  default = {}
 }

@@ -1,137 +1,115 @@
-###############################################################################
-# VPC + 멀티 서브넷 (설계문서 1장)
-#
-#   Public-Web   : ALB / 웹서버(DVWA)
-#   Private-DB   : MySQL 수동 대응, MySQL 자동 대응
-#   Private-App  : Docker 호스트, 대시보드 앱
-#
-# 한 AZ 안에서 용도별로만 나눕니다. ALB는 최소 2개 AZ를 요구하므로
-# enable_alb=true 일 때만 두 번째 퍼블릭 서브넷을 추가로 만듭니다.
-###############################################################################
-
-data "aws_availability_zones" "available" {
-  state = "available"
-}
-
-locals {
-  # ALB용 두 번째 AZ: 현재 AZ가 아닌 것 중 첫 번째.
-  secondary_az = [
-    for az in data.aws_availability_zones.available.names : az
-    if az != var.availability_zone
-  ][0]
-}
+############################################
+# VPC / IGW
+# 기획서 아키텍처 시트: VPC 10.0.0.0/16 (ap-northeast-2a)
+############################################
 
 resource "aws_vpc" "this" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
 
-  tags = {
-    Name = "${var.name_prefix}-vpc"
-  }
+  tags = merge(var.tags, { Name = "${var.name_prefix}-vpc" })
 }
 
 resource "aws_internet_gateway" "this" {
   vpc_id = aws_vpc.this.id
 
-  tags = {
-    Name = "${var.name_prefix}-igw"
-  }
+  tags = merge(var.tags, { Name = "${var.name_prefix}-igw" })
 }
 
-###############################################################################
-# 서브넷
-###############################################################################
+############################################
+# 서브넷 3종 + ALB 용 보조 Public 서브넷
+#
+#  Public-Web  10.0.0.0/24 : ALB, DVWA 웹서버, NAT
+#  Private-DB  10.0.1.0/24 : MySQL EC2 1대
+#  Private-App 10.0.2.0/24 : Docker Host, 보안 대시보드
+#
+#  ALB 는 서로 다른 AZ 2개가 필요합니다. 서브넷 자체는 과금이 없으므로
+#  보조 서브넷을 항상 만들어 두고, enable_alb = true 일 때만 ALB 가 함께 씁니다.
+############################################
 
 resource "aws_subnet" "public_web" {
   vpc_id                  = aws_vpc.this.id
-  cidr_block              = var.public_web_subnet_cidr
-  availability_zone       = var.availability_zone
+  cidr_block              = var.subnet_cidrs.public_web
+  availability_zone       = var.az_primary
   map_public_ip_on_launch = true
 
-  tags = {
+  tags = merge(var.tags, {
     Name = "${var.name_prefix}-public-web"
     Tier = "public-web"
-  }
+  })
 }
 
-resource "aws_subnet" "public_secondary" {
-  count = var.enable_alb ? 1 : 0
-
+resource "aws_subnet" "public_web_b" {
   vpc_id                  = aws_vpc.this.id
-  cidr_block              = var.alb_secondary_subnet_cidr
-  availability_zone       = local.secondary_az
+  cidr_block              = var.subnet_cidrs.public_web_b
+  availability_zone       = var.az_secondary
   map_public_ip_on_launch = true
 
-  tags = {
-    Name = "${var.name_prefix}-public-alb-2nd"
+  tags = merge(var.tags, {
+    Name = "${var.name_prefix}-public-web-b"
     Tier = "public-web"
-  }
+    Note = "ALB 2AZ requirement only"
+  })
 }
 
 resource "aws_subnet" "private_db" {
   vpc_id            = aws_vpc.this.id
-  cidr_block        = var.private_db_subnet_cidr
-  availability_zone = var.availability_zone
+  cidr_block        = var.subnet_cidrs.private_db
+  availability_zone = var.az_primary
 
-  tags = {
+  tags = merge(var.tags, {
     Name = "${var.name_prefix}-private-db"
     Tier = "private-db"
-  }
+  })
 }
 
 resource "aws_subnet" "private_app" {
   vpc_id            = aws_vpc.this.id
-  cidr_block        = var.private_app_subnet_cidr
-  availability_zone = var.availability_zone
+  cidr_block        = var.subnet_cidrs.private_app
+  availability_zone = var.az_primary
 
-  tags = {
+  tags = merge(var.tags, {
     Name = "${var.name_prefix}-private-app"
     Tier = "private-app"
-  }
+  })
 }
 
-###############################################################################
-# NAT Gateway (선택) — 기본 off
-###############################################################################
+############################################
+# NAT Gateway — 부트스트랩 때만 켭니다 (비용)
+############################################
 
 resource "aws_eip" "nat" {
   count  = var.enable_nat_gateway ? 1 : 0
   domain = "vpc"
 
-  tags = {
-    Name = "${var.name_prefix}-nat-eip"
-  }
+  tags = merge(var.tags, { Name = "${var.name_prefix}-nat-eip" })
 }
 
 resource "aws_nat_gateway" "this" {
-  count = var.enable_nat_gateway ? 1 : 0
-
+  count         = var.enable_nat_gateway ? 1 : 0
   allocation_id = aws_eip.nat[0].id
   subnet_id     = aws_subnet.public_web.id
 
-  tags = {
-    Name = "${var.name_prefix}-nat"
-  }
+  tags = merge(var.tags, { Name = "${var.name_prefix}-nat" })
 
   depends_on = [aws_internet_gateway.this]
 }
 
-###############################################################################
+############################################
 # 라우팅
-###############################################################################
+############################################
 
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.this.id
 
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.this.id
-  }
+  tags = merge(var.tags, { Name = "${var.name_prefix}-rt-public" })
+}
 
-  tags = {
-    Name = "${var.name_prefix}-rt-public"
-  }
+resource "aws_route" "public_default" {
+  route_table_id         = aws_route_table.public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.this.id
 }
 
 resource "aws_route_table_association" "public_web" {
@@ -139,156 +117,64 @@ resource "aws_route_table_association" "public_web" {
   route_table_id = aws_route_table.public.id
 }
 
-resource "aws_route_table_association" "public_secondary" {
-  count          = var.enable_alb ? 1 : 0
-  subnet_id      = aws_subnet.public_secondary[0].id
+resource "aws_route_table_association" "public_web_b" {
+  subnet_id      = aws_subnet.public_web_b.id
   route_table_id = aws_route_table.public.id
 }
 
-# Private 라우트 테이블 2개(DB/App)를 따로 두어, 필요하면 한쪽만 NAT를 붙이거나
-# 나중에 Network Firewall 엔드포인트로 경로를 틀 수 있게 해둡니다.
-resource "aws_route_table" "private_db" {
+resource "aws_route_table" "private" {
   vpc_id = aws_vpc.this.id
 
-  tags = {
-    Name = "${var.name_prefix}-rt-private-db"
-  }
+  tags = merge(var.tags, { Name = "${var.name_prefix}-rt-private" })
 }
 
-resource "aws_route_table" "private_app" {
-  vpc_id = aws_vpc.this.id
-
-  tags = {
-    Name = "${var.name_prefix}-rt-private-app"
-  }
-}
-
-resource "aws_route" "private_db_nat" {
-  count = var.enable_nat_gateway ? 1 : 0
-
-  route_table_id         = aws_route_table.private_db.id
-  destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.this[0].id
-}
-
-resource "aws_route" "private_app_nat" {
-  count = var.enable_nat_gateway ? 1 : 0
-
-  route_table_id         = aws_route_table.private_app.id
+resource "aws_route" "private_nat" {
+  count                  = var.enable_nat_gateway ? 1 : 0
+  route_table_id         = aws_route_table.private.id
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = aws_nat_gateway.this[0].id
 }
 
 resource "aws_route_table_association" "private_db" {
   subnet_id      = aws_subnet.private_db.id
-  route_table_id = aws_route_table.private_db.id
+  route_table_id = aws_route_table.private.id
 }
 
 resource "aws_route_table_association" "private_app" {
   subnet_id      = aws_subnet.private_app.id
-  route_table_id = aws_route_table.private_app.id
+  route_table_id = aws_route_table.private.id
 }
 
-###############################################################################
-# VPC Flow Logs — 설계문서 2장의 "MySQL 자동" 시나리오(포트 스캔) 근거 로그
-###############################################################################
+############################################
+# VPC 엔드포인트 — NAT 없이 SSM Session Manager 접속
+# 기획서 트래픽 허용표 ⑥ 관리자 접속: SSM (HTTPS 443), SSH 22 미개방
+############################################
 
-resource "aws_cloudwatch_log_group" "flow_logs" {
-  name              = "/aws/vpc/${var.name_prefix}/flow-logs"
-  retention_in_days = 14 # 시연용이라 짧게. 보관 기간이 곧 비용입니다.
+locals {
+  interface_endpoints = var.enable_vpc_endpoints ? toset(["ssm", "ssmmessages", "ec2messages"]) : toset([])
 }
 
-data "aws_iam_policy_document" "flow_logs_assume" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["vpc-flow-logs.amazonaws.com"]
-    }
-  }
+resource "aws_vpc_endpoint" "interface" {
+  for_each = local.interface_endpoints
+
+  vpc_id              = aws_vpc.this.id
+  service_name        = "com.amazonaws.${var.region}.${each.value}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.private_app.id]
+  security_group_ids  = [aws_security_group.vpce.id]
+  private_dns_enabled = true
+
+  tags = merge(var.tags, { Name = "${var.name_prefix}-vpce-${each.value}" })
 }
 
-resource "aws_iam_role" "flow_logs" {
-  name               = "${var.name_prefix}-vpc-flow-logs"
-  assume_role_policy = data.aws_iam_policy_document.flow_logs_assume.json
-}
+# S3 게이트웨이 엔드포인트는 무료입니다. 점검 결과 업로드·패키지 다운로드에 사용.
+resource "aws_vpc_endpoint" "s3" {
+  count = var.enable_vpc_endpoints ? 1 : 0
 
-data "aws_iam_policy_document" "flow_logs" {
-  statement {
-    effect = "Allow"
-    actions = [
-      "logs:CreateLogStream",
-      "logs:PutLogEvents",
-      "logs:DescribeLogGroups",
-      "logs:DescribeLogStreams",
-    ]
-    resources = ["${aws_cloudwatch_log_group.flow_logs.arn}:*"]
-  }
-}
+  vpc_id            = aws_vpc.this.id
+  service_name      = "com.amazonaws.${var.region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.private.id, aws_route_table.public.id]
 
-resource "aws_iam_role_policy" "flow_logs" {
-  name   = "${var.name_prefix}-vpc-flow-logs"
-  role   = aws_iam_role.flow_logs.id
-  policy = data.aws_iam_policy_document.flow_logs.json
-}
-
-resource "aws_flow_log" "this" {
-  vpc_id                   = aws_vpc.this.id
-  traffic_type             = "ALL"
-  log_destination_type     = "cloud-watch-logs"
-  log_destination          = aws_cloudwatch_log_group.flow_logs.arn
-  iam_role_arn             = aws_iam_role.flow_logs.arn
-  max_aggregation_interval = 60
-
-  tags = {
-    Name = "${var.name_prefix}-flow-logs"
-  }
-}
-
-###############################################################################
-# NACL — 서브넷 단위 방어 (Security Group과의 이중 방어, 설계문서 1장)
-#
-# 상태 비저장(stateless)이라 응답 트래픽용 임시 포트를 반드시 같이 열어야 합니다.
-# 시연 중 트래픽이 막히면 여기부터 확인하세요.
-###############################################################################
-
-resource "aws_network_acl" "private_db" {
-  vpc_id     = aws_vpc.this.id
-  subnet_ids = [aws_subnet.private_db.id]
-
-  tags = {
-    Name = "${var.name_prefix}-nacl-private-db"
-  }
-}
-
-# 인바운드: VPC 내부에서 오는 트래픽만 허용
-resource "aws_network_acl_rule" "db_in_vpc" {
-  network_acl_id = aws_network_acl.private_db.id
-  rule_number    = 100
-  egress         = false
-  protocol       = "-1"
-  rule_action    = "allow"
-  cidr_block     = var.vpc_cidr
-}
-
-# 인바운드: 아웃바운드 통신의 응답(임시 포트)
-resource "aws_network_acl_rule" "db_in_ephemeral" {
-  network_acl_id = aws_network_acl.private_db.id
-  rule_number    = 110
-  egress         = false
-  protocol       = "tcp"
-  rule_action    = "allow"
-  cidr_block     = "0.0.0.0/0"
-  from_port      = 1024
-  to_port        = 65535
-}
-
-resource "aws_network_acl_rule" "db_out_all" {
-  network_acl_id = aws_network_acl.private_db.id
-  rule_number    = 100
-  egress         = true
-  protocol       = "-1"
-  rule_action    = "allow"
-  cidr_block     = "0.0.0.0/0"
+  tags = merge(var.tags, { Name = "${var.name_prefix}-vpce-s3" })
 }

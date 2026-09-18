@@ -1,0 +1,55 @@
+schemaVersion: '2.2'
+description: |
+  Docker Host 의 Nginx 설정을 보안 강화본으로 교체합니다 (SEC-02).
+  server_tokens off, 보안 헤더(nosniff/SAMEORIGIN/CSP), HTTP->HTTPS 301.
+  nginx -t 로 검증 후 reload 하며, 실패하면 원복합니다.
+parameters:
+  ServiceDir:
+    type: String
+    default: /opt/app
+    description: compose.yaml 과 nginx/ 가 있는 경로
+mainSteps:
+  - action: 'aws:runShellScript'
+    name: hardenNginx
+    inputs:
+      runCommand:
+        - '#!/bin/bash'
+        - set -euo pipefail
+        - cd "{{ ServiceDir }}"
+        - cp nginx/default.conf "nginx/default.conf.bak.$(date +%s)"
+        - |
+          cat > nginx/default.conf <<'NGINX'
+          server {
+              listen 80;
+              server_name _;
+              location /health { return 200 "ok\n"; add_header Content-Type text/plain; }
+              return 301 https://$host$request_uri;
+          }
+          server {
+              listen 443 ssl;
+              server_name _;
+              ssl_certificate     /etc/nginx/certs/self.crt;
+              ssl_certificate_key /etc/nginx/certs/self.key;
+              ssl_protocols TLSv1.2 TLSv1.3;
+              server_tokens off;
+              add_header X-Content-Type-Options nosniff always;
+              add_header X-Frame-Options SAMEORIGIN always;
+              add_header Content-Security-Policy "default-src 'self'" always;
+              location /health { return 200 "ok\n"; add_header Content-Type text/plain; }
+              location / {
+                  proxy_pass http://web:5000;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              }
+          }
+          NGINX
+        - mkdir -p nginx/certs
+        - '[ -f nginx/certs/self.crt ] || openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout nginx/certs/self.key -out nginx/certs/self.crt -subj "/CN=lab"'
+        - |
+          # compose 에 443 포트와 인증서 마운트가 없으면 추가 안내만 출력(운영자 확인)
+          if ! grep -q '443:443' compose.yaml; then
+            echo "WARN: compose.yaml 에 443 포트 매핑이 없습니다. 팀이 nginx 서비스에 443:443 과 certs 마운트를 추가한 뒤 재적용하세요."
+          fi
+        - docker compose exec -T nginx nginx -t && docker compose exec -T nginx nginx -s reload || (echo "nginx test failed, restoring"; cp "$(ls -t nginx/default.conf.bak.* | head -1)" nginx/default.conf; exit 1)
+        - echo "nginx hardened (SEC-02)"

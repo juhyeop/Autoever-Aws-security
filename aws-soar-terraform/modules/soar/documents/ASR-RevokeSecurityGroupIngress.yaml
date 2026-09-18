@@ -1,0 +1,54 @@
+schemaVersion: '0.3'
+description: |
+  대상 보안그룹에서 0.0.0.0/0 또는 ::/0 인바운드 규칙을 회수합니다.
+  조치 전/후 규칙을 문자열로 반환해 대시보드 Before-After 비교에 사용합니다.
+  회수만 하므로 필요 시 다시 추가할 수 있습니다(되돌릴 수 있는 조치).
+assumeRole: '{{ AutomationAssumeRole }}'
+parameters:
+  SecurityGroupId:
+    type: String
+    description: 인바운드 규칙을 회수할 보안그룹 ID
+  AutomationAssumeRole:
+    type: String
+    description: 이 문서를 실행할 역할 ARN
+mainSteps:
+  - name: revokeOpenIngress
+    action: 'aws:executeScript'
+    outputs:
+      - Name: before
+        Selector: $.Payload.before
+        Type: String
+      - Name: after
+        Selector: $.Payload.after
+        Type: String
+      - Name: revoked_count
+        Selector: $.Payload.revoked_count
+        Type: Integer
+    inputs:
+      Runtime: python3.11
+      Handler: handler
+      InputPayload:
+        sg_id: '{{ SecurityGroupId }}'
+      Script: |
+        import boto3, json
+        def handler(event, context):
+            ec2 = boto3.client("ec2")
+            sg_id = event["sg_id"]
+            desc = ec2.describe_security_groups(GroupIds=[sg_id])["SecurityGroups"][0]
+            before = json.dumps(desc.get("IpPermissions", []), default=str)
+            revoked = 0
+            for perm in desc.get("IpPermissions", []):
+                open_v4 = [r for r in perm.get("IpRanges", []) if r.get("CidrIp") == "0.0.0.0/0"]
+                open_v6 = [r for r in perm.get("Ipv6Ranges", []) if r.get("CidrIpv6") == "::/0"]
+                if not open_v4 and not open_v6:
+                    continue
+                revoke = {k: perm[k] for k in ("IpProtocol", "FromPort", "ToPort") if k in perm}
+                if open_v4:
+                    revoke["IpRanges"] = open_v4
+                if open_v6:
+                    revoke["Ipv6Ranges"] = open_v6
+                ec2.revoke_security_group_ingress(GroupId=sg_id, IpPermissions=[revoke])
+                revoked += 1
+            after_desc = ec2.describe_security_groups(GroupIds=[sg_id])["SecurityGroups"][0]
+            after = json.dumps(after_desc.get("IpPermissions", []), default=str)
+            return {"before": before, "after": after, "revoked_count": revoked}

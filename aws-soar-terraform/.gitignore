@@ -1,22 +1,25 @@
 # Terraform
 .terraform/
-.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 crash.log
 crash.*.log
-
-# 공인 IP / 이메일 등 팀 고유 값이 들어갑니다. 절대 커밋하지 마세요.
-terraform.tfvars
-*.auto.tfvars
-
-# plan 파일에는 평문 값이 들어갈 수 있습니다.
 *.tfplan
+*.tfvars
+!*.tfvars.example
+backend.hcl
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# 자격증명 / 키
+*.pem
+*.ppk
+*.key
+.env
 
 # Lambda 빌드 산출물
-modules/soar/.build/
-
-# 에디터
-.vscode/
-.idea/
-.DS_Store
+modules/soar/build/*.zip

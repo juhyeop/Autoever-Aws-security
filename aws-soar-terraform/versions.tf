@@ -3,17 +3,20 @@ terraform {
 
   required_providers {
     aws = {
-      source = "hashicorp/aws"
-      # 2026-09 기준 최신 릴리스는 6.64.x. 6.x 안에서만 올라가도록 고정.
+      source  = "hashicorp/aws"
       version = "~> 6.0"
+    }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.6"
+    }
+    http = {
+      source  = "hashicorp/http"
+      version = "~> 3.4"
     }
     random = {
       source  = "hashicorp/random"
       version = "~> 3.6"
-    }
-    archive = {
-      source  = "hashicorp/archive"
-      version = "~> 2.4"
     }
   }
 }

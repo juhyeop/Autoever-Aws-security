@@ -1,0 +1,66 @@
+#!/bin/bash
+# MySQL EC2 (단독 DB) - 탐지/조치 대상. RDS 대신 EC2 설치(로그 수집형 탐지용)
+# 로그: /var/log/user-data.log
+set -euxo pipefail
+exec > >(tee -a /var/log/user-data.log) 2>&1
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y ca-certificates curl unzip jq mysql-server
+
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+unzip -oq /tmp/awscliv2.zip -d /tmp && /tmp/aws/install --update
+
+# 자격증명은 Secrets Manager 에서 (하드코딩 금지)
+SECRET_JSON=$(aws secretsmanager get-secret-value --region ${region} --secret-id ${db_secret_name} --query SecretString --output text)
+ROOT_PW=$(echo "$SECRET_JSON" | jq -r .root_password)
+APP_USER=$(echo "$SECRET_JSON" | jq -r .app_user)
+APP_PW=$(echo "$SECRET_JSON" | jq -r .app_password)
+
+# 인증 실패 로그를 남기도록 general/error log 활성화 (SEC-06 탐지 근거)
+cat > /etc/mysql/mysql.conf.d/zz-lab.cnf <<CNF
+[mysqld]
+bind-address = 0.0.0.0
+log_error = /var/log/mysql/error.log
+general_log = 1
+general_log_file = /var/log/mysql/general.log
+CNF
+systemctl restart mysql
+
+# root 비밀번호 설정 + 앱 전용 계정 분리 (root 와 분리 - 체크리스트 #18)
+mysql <<SQL
+ALTER USER 'root'@'localhost' IDENTIFIED WITH caching_sha2_password BY '$ROOT_PW';
+CREATE DATABASE IF NOT EXISTS ${db_name};
+CREATE USER IF NOT EXISTS '$APP_USER'@'%' IDENTIFIED BY '$APP_PW';
+GRANT SELECT, INSERT, UPDATE, DELETE ON ${db_name}.* TO '$APP_USER'@'%';
+FLUSH PRIVILEGES;
+SQL
+
+# CloudWatch Agent - MySQL 인증 실패 로그를 지표 필터 대상 로그 그룹으로 전송
+curl -fsSL https://amazoncloudwatch-agent.s3.amazonaws.com/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb -o /tmp/cwagent.deb
+dpkg -i -E /tmp/cwagent.deb || true
+cat > /opt/aws/amazon-cloudwatch-agent/etc/cw.json <<CWJSON
+{
+  "agent": { "metrics_collection_interval": 60, "run_as_user": "root" },
+  "metrics": {
+    "namespace": "${project}/host",
+    "append_dimensions": { "InstanceId": "\$${aws:InstanceId}" },
+    "metrics_collected": {
+      "mem": { "measurement": [ { "name": "mem_used_percent", "rename": "MemoryUsedPercent" } ] }
+    }
+  },
+  "logs": {
+    "logs_collected": {
+      "files": {
+        "collect_list": [
+          { "file_path": "/var/log/mysql/error.log",   "log_group_name": "${log_group_mysql}", "log_stream_name": "{instance_id}/error" },
+          { "file_path": "/var/log/mysql/general.log", "log_group_name": "${log_group_mysql}", "log_stream_name": "{instance_id}/general" }
+        ]
+      }
+    }
+  }
+}
+CWJSON
+/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/cw.json || true
+
+echo "mysql-db user-data done."

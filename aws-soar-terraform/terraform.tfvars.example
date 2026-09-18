@@ -1,70 +1,56 @@
-# terraform.tfvars.example
-# 이 파일을 terraform.tfvars 로 복사해서 값을 채우세요.
-# terraform.tfvars 는 .gitignore에 들어 있습니다(공인 IP가 들어가므로).
+############################################
+# 예시 변수 파일. 복사해서 terraform.tfvars 로 쓰세요.
+#   Copy-Item .\terraform.tfvars.example .\terraform.tfvars
+# terraform.tfvars 와 *.tfstate, *.pem 은 절대 Git 에 올리지 마세요.
+############################################
 
-###############################################################################
-# 필수
-###############################################################################
+project   = "soar-sec"
+env       = "dev"
+team_name = "team2"
+region    = "ap-northeast-2"
 
-# 팀 사무실이나 본인 공인 IP. `curl ifconfig.me` 로 확인한 뒤 /32 를 붙이세요.
-# DVWA 같은 취약한 앱을 여기로만 열기 때문에 정확히 넣어야 합니다.
-admin_cidr = "203.0.113.45/32"
+# 비워두면 실행 PC 공인 IP/32 가 자동 적용됩니다. 팀 공용이면 사무실 대역/32 로.
+admin_cidr = ""
 
-###############################################################################
-# 기본값을 바꾸고 싶을 때
-###############################################################################
+############################################
+# 비용 토글 — 발표/시연 직전에만 켜세요.
+############################################
+enable_nat_gateway   = false  # 부트스트랩 시에만 true, 끝나면 false
+enable_vpc_endpoints = true   # SSM 접속용 (NAT 대신)
+enable_alb           = false  # SEC-08(WAF) 시연 시 true
+enable_waf           = false  # enable_alb=true 와 함께
+enable_dvwa_instance = true
+enable_attacker_instance = false  # 내부 공격 재현 시 true
 
-project     = "aws-secops"
-environment = "lab"
-region      = "ap-northeast-2"
+############################################
+# 탐지 서비스 — 기본 전부 켜짐. 비용 걱정되면 개별 false.
+############################################
+# enable_guardduty       = true
+# enable_inspector2      = true
+# enable_config          = true
+# enable_security_hub    = true
+# enable_access_analyzer = true
+# enable_cloudtrail      = true
 
-# EC2 키페어 이름. 비워두면 SSM Session Manager로만 접속합니다(키 관리가 없어 더 안전).
-# key_name = "my-keypair"
+# GuardDuty AI Protection (별도 과금)
+enable_guardduty_ai_protection = false
 
-instance_type = "t3.micro"
+############################################
+# 자동조치
+############################################
+enable_auto_remediation = true   # false 면 전체 dry-run(판단만)
+alert_email             = ""     # 예: "team2-secops@example.com"
 
-###############################################################################
-# 비용 토글 — 기본은 전부 off
-#
-# 최초 apply 절차:
-#   1) enable_nat_gateway = true 로 apply  (Private 인스턴스 부트스트랩)
-#   2) 인스턴스 준비가 끝나면 false 로 되돌리고 다시 apply
-###############################################################################
+############################################
+# DB 비밀번호 — 비우면 Secrets Manager 에 랜덤 생성.
+# 값을 넣으면 tfstate 에 남으니 실습용으로만.
+############################################
+# mysql_root_password = "ChangeMe-Root-123!"
+# mysql_app_password  = "ChangeMe-App-123!"
 
-enable_nat_gateway = false
-enable_alb         = false
-enable_waf         = false
-
-###############################################################################
-# 탐지 서비스 (SIEM)
-###############################################################################
-
-enable_guardduty       = true
-enable_inspector       = true
-enable_config          = true
-enable_security_hub    = true
-enable_access_analyzer = true
-enable_cloudtrail      = true
-
-inspector_resource_types = ["EC2", "ECR"]
-
-# GuardDuty 추가 기능은 전부 별도 과금이라 기본은 비어 있습니다.
-# 발표에서 "GuardDuty AI Protection까지 봤다"를 보여주려면 아래 주석을 푸세요.
-# guardduty_optional_features = [
-#   { name = "AI_PROTECTION" },
-#   { name = "RUNTIME_MONITORING" },
-# ]
-
-###############################################################################
-# SOAR / NMS
-###############################################################################
-
-# false면 Lambda가 판단까지만 하고 실제 SSM 실행은 하지 않습니다(시연 리허설용).
-enable_auto_remediation = true
-
-# apply 후 확인 메일의 링크를 눌러야 알림이 옵니다.
-# alert_email = "team@example.com"
-
-cpu_threshold            = 80
-mem_threshold            = 80
-alarm_evaluation_periods = 5
+############################################
+# 임계치 — 기획서 기준 80%
+############################################
+cpu_alarm_threshold       = 80
+memory_alarm_threshold    = 80
+mysql_auth_fail_threshold = 10

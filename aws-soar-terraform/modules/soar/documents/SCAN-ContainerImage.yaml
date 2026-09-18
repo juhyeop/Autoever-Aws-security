@@ -1,0 +1,32 @@
+schemaVersion: '2.2'
+description: |
+  Docker Host 에서 실행 중인 이미지와 Compose 설정을 Trivy 로 점검하고
+  HIGH/CRITICAL CVE 결과를 S3 에 업로드합니다. (수동 모니터링 #2, SEC-04, 체크리스트)
+parameters:
+  ServiceDir:
+    type: String
+    default: /opt/app
+  ScanBucket:
+    type: String
+mainSteps:
+  - action: 'aws:runShellScript'
+    name: trivyScan
+    inputs:
+      runCommand:
+        - '#!/bin/bash'
+        - set -uo pipefail
+        - |
+          if ! command -v trivy >/dev/null; then
+            sudo apt-get update -y
+            sudo apt-get install -y wget apt-transport-https gnupg
+            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+            echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+            sudo apt-get update -y && sudo apt-get install -y trivy
+          fi
+        - TS=$(date +%Y%m%dT%H%M%SZ)
+        - OUT="/tmp/trivy-$TS.txt"
+        - cd "{{ ServiceDir }}"
+        - docker compose config | tee /tmp/compose-config-$TS.txt >/dev/null || true
+        - 'for img in $(docker compose config --images 2>/dev/null | sort -u); do echo "== $img =="; trivy image --scanners vuln --severity HIGH,CRITICAL --no-progress "$img"; done | tee "$OUT" || true'
+        - aws s3 cp "$OUT" "s3://{{ ScanBucket }}/trivy/$TS.txt"
+        - echo "uploaded to s3://{{ ScanBucket }}/trivy/$TS.txt"

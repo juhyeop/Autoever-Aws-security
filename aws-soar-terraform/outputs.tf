@@ -1,95 +1,107 @@
-###############################################################################
-# apply 후 시연에 바로 필요한 값들
-###############################################################################
-
-output "vpc_id" {
-  value = module.network.vpc_id
-}
-
-output "dvwa_url" {
-  description = "웹 취약점 시연 대상 주소. admin_cidr 에서만 접근됩니다."
-  value       = var.enable_alb ? "http://${module.compute.alb_dns_name}" : "http://${module.compute.web_public_ip}"
-}
-
-output "dashboard_private_ip" {
-  description = "Flask 대시보드 주소(사설). SSM 포트포워딩이나 Bastion으로 접근하세요."
-  value       = "http://${module.compute.dashboard_private_ip}:5000"
-}
-
-output "instance_ids" {
-  description = "시연용 인스턴스 목록."
-  value       = module.compute.all_instance_ids
-}
-
-output "mysql_auto_security_group_id" {
-  description = <<-EOT
-    자동조치 시연의 핵심 대상.
-    이 SG에 3306/0.0.0.0/0 규칙을 직접 넣으면(= 침해사례 재현)
-    Config → Security Hub → EventBridge → Lambda → SSM Automation 순으로
-    자동 회수되는 걸 볼 수 있습니다.
-  EOT
-  value       = module.network.mysql_auto_security_group_id
-}
-
-output "mysql_manual_security_group_id" {
-  description = "같은 규칙을 넣어도 AutoRemediation 태그가 없어 수동 알림만 가는 대조군."
-  value       = module.network.mysql_manual_security_group_id
-}
-
-output "mysql_secret_arn" {
-  description = "MySQL root 비밀번호가 담긴 Secrets Manager 시크릿."
-  value       = module.compute.mysql_secret_arn
-}
-
-output "sns_topic_arn" {
-  value = module.soar.sns_topic_arn
-}
-
-output "asr_trigger_function_name" {
-  description = "자동조치 판단 Lambda. demo/trigger-auto-remediation.sh 가 이 값을 씁니다."
-  value       = module.soar.asr_trigger_function_name
-}
-
-output "correlator_function_name" {
-  value = module.soar.correlator_function_name
-}
+############################################
+# 접속 정보
+############################################
 
 output "region" {
   value = var.region
 }
 
-output "automation_document_name" {
-  description = "대시보드 app/config.py 의 ALLOWED_AUTOMATION_DOCUMENTS 에 넣을 값."
-  value       = module.soar.automation_document_name
+output "detected_admin_cidr" {
+  description = "SG 에 적용된 관리자 CIDR (미지정 시 실행 PC 공인 IP)"
+  value       = local.admin_cidr
 }
 
-output "automation_role_arn" {
-  description = "대시보드가 SSM Automation 실행 시 넘길 automation 역할 ARN (자동대응 탭)."
-  value       = module.soar.automation_role_arn
+output "web_url" {
+  description = "서비스 접속 주소 (ALB 사용 시 ALB, 아니면 DVWA 웹서버)"
+  value = var.enable_alb ? "http://${module.compute.alb_dns_name}" : (
+    var.enable_dvwa_instance ? "http://${module.compute.web_dvwa_public_ip}" : "ALB/DVWA 비활성"
+  )
 }
 
-output "correlated_findings_table" {
-  description = "GuardDuty x Inspector 상관분석 결과 테이블 (대시보드가 조회)."
-  value       = module.soar.correlated_findings_table
+output "alb_dns_name" {
+  value = module.compute.alb_dns_name
 }
 
-output "cloudwatch_dashboard_url" {
-  value = "https://${var.region}.console.aws.amazon.com/cloudwatch/home?region=${var.region}#dashboards:name=${module.soar.cloudwatch_dashboard_name}"
+output "dashboard_ssm_port_forward" {
+  description = "보안 대시보드 접속용 SSM 포트포워딩 명령"
+  value       = "aws ssm start-session --target ${module.compute.dashboard_instance_id} --document-name AWS-StartPortForwardingSession --parameters '{\"portNumber\":[\"5000\"],\"localPortNumber\":[\"5000\"]}' --region ${var.region}"
 }
 
-output "cloudtrail_bucket" {
-  value = module.security.cloudtrail_bucket
+output "ssh_commands" {
+  description = "SSM Session Manager 접속 명령 (SSH 22 미개방 — 세션 매니저 사용)"
+  value = {
+    for name, id in module.compute.monitored_instances :
+    name => "aws ssm start-session --target ${id} --region ${var.region}"
+  }
 }
+
+output "instance_ids" {
+  value = module.compute.monitored_instances
+}
+
+############################################
+# 대시보드가 읽어야 하는 리소스
+############################################
+
+output "correlated_findings_table" { value = module.soar.correlated_findings_table_name }
+output "remediation_actions_table" { value = module.soar.remediation_actions_table_name }
+output "scan_results_bucket" { value = module.soar.scan_results_bucket }
+output "sns_topic_arn" { value = module.soar.sns_topic_arn }
+output "ecr_repository_url" { value = module.compute.ecr_repository_url }
+output "db_secret_name" { value = module.compute.db_secret_name }
+output "cloudwatch_dashboard" { value = module.soar.cloudwatch_dashboard_name }
+output "asr_trigger_function_name" { value = module.soar.asr_trigger_function_name }
+output "correlator_function_name" { value = module.soar.correlator_function_name }
+
+############################################
+# 자동/수동 조치 플레이북 (기획서 성공기준 매핑)
+############################################
+
+output "ssm_playbooks" {
+  description = "자동개선 3 / 수동개선 2 SSM 문서"
+  value       = module.soar.ssm_playbooks
+}
+
+output "manual_scan_documents" {
+  description = "수동 모니터링 2 SSM Run Command 문서"
+  value       = module.soar.manual_scan_document
+}
+
+output "target_security_groups" {
+  description = "SEC-03 시연 대상 — 같은 위반, 태그로 결과가 갈립니다"
+  value = {
+    auto_remediated = module.network.sg_db_auto_id
+    manual_only     = module.network.sg_db_manual_id
+    private_nacl_id = module.network.private_nacl_id
+  }
+}
+
+############################################
+# 비용 경고
+############################################
 
 output "cost_warning" {
-  description = "지금 켜져 있는 유료 리소스 요약."
-  value = join(" | ", compact([
-    var.enable_nat_gateway ? "NAT Gateway 켜짐(시간당 과금)" : null,
-    var.enable_alb ? "ALB 켜짐(시간당 과금)" : null,
-    var.enable_waf ? "WAF WebACL 켜짐(월 고정 + 요청당)" : null,
-    var.enable_guardduty ? "GuardDuty 켜짐" : null,
-    var.enable_inspector ? "Inspector 켜짐" : null,
-    var.enable_config ? "Config 켜짐(기록 항목당)" : null,
-    var.enable_security_hub ? "Security Hub 켜짐" : null,
+  description = "현재 켜져 있는 유료 리소스"
+  value = join("\n", compact([
+    var.enable_nat_gateway ? "NAT Gateway — 시간당+데이터 처리 과금. 부트스트랩 후 false 로." : "",
+    var.enable_vpc_endpoints ? "VPC 인터페이스 엔드포인트 3개 — 엔드포인트당 시간당 과금(NAT 보다 저렴)." : "",
+    var.enable_alb ? "ALB — 시간당+LCU 과금." : "",
+    var.enable_waf ? "WAFv2 Web ACL — Web ACL/룰/요청 과금." : "",
+    var.enable_guardduty ? "GuardDuty — 무료 체험 종료 후 사용량 과금." : "",
+    var.enable_guardduty_ai_protection ? "GuardDuty AI Protection — 별도 과금." : "",
+    var.enable_inspector2 ? "Inspector2 — 스캔 대상당 과금." : "",
+    var.enable_config ? "AWS Config — 기록 항목당 과금(7개 타입만 기록)." : "",
+    var.enable_security_hub ? "Security Hub — 체크/finding 건당 과금." : "",
+    var.enable_cloudtrail ? "CloudTrail — 관리 이벤트 1개는 무료, S3 저장 비용 발생." : "",
+    "EC2 ${3 + (var.enable_dvwa_instance ? 1 : 0) + (var.enable_attacker_instance ? 1 : 0)}대 — 상시 과금. 실습 종료 시 중지/종료.",
   ]))
+}
+
+output "cleanup_checklist" {
+  value = <<-EOT
+    1) demo/cleanup.sh 실행 — SG 룰 원복, 테스트 액세스 키 삭제
+    2) terraform destroy
+    3) 콘솔에서 GuardDuty / Security Hub / Inspector2 / Config 비활성화 확인
+    4) CloudTrail S3 버킷과 KMS 키는 보존 목적상 수동 삭제
+  EOT
 }

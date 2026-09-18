@@ -1,0 +1,43 @@
+schemaVersion: '0.3'
+description: |
+  노출된 IAM Access Key 를 Inactive 로 전환합니다. 삭제가 아니라 비활성화라
+  오탐 시 다시 Active 로 되돌릴 수 있습니다(되돌릴 수 있는 조치).
+assumeRole: '{{ AutomationAssumeRole }}'
+parameters:
+  AccessKeyId:
+    type: String
+    description: 비활성화할 Access Key ID
+  AutomationAssumeRole:
+    type: String
+mainSteps:
+  - name: disableKey
+    action: 'aws:executeScript'
+    outputs:
+      - Name: before
+        Selector: $.Payload.before
+        Type: String
+      - Name: after
+        Selector: $.Payload.after
+        Type: String
+    inputs:
+      Runtime: python3.11
+      Handler: handler
+      InputPayload:
+        access_key_id: '{{ AccessKeyId }}'
+      Script: |
+        import boto3
+        def handler(event, context):
+            iam = boto3.client("iam")
+            key_id = event["access_key_id"]
+            meta = iam.get_access_key_last_used(AccessKeyId=key_id)
+            user = meta.get("UserName")
+            before = "unknown"
+            if user:
+                for k in iam.list_access_keys(UserName=user)["AccessKeyMetadata"]:
+                    if k["AccessKeyId"] == key_id:
+                        before = k["Status"]
+                iam.update_access_key(UserName=user, AccessKeyId=key_id, Status="Inactive")
+                after = "Inactive"
+            else:
+                after = "user-not-found"
+            return {"before": before, "after": after}

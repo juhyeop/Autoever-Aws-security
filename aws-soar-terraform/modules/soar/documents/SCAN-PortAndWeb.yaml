@@ -1,0 +1,27 @@
+schemaVersion: '2.2'
+description: |
+  대상 호스트에 대해 포트 스캔과 HTTP 보안 헤더 점검을 실행하고
+  결과를 S3(스캔 결과 버킷)에 업로드합니다. (수동 모니터링 #1, SEC-01/02/03)
+parameters:
+  TargetHost:
+    type: String
+    description: 점검 대상 사설 IP 또는 호스트명
+  ScanBucket:
+    type: String
+    description: 결과를 올릴 S3 버킷
+mainSteps:
+  - action: 'aws:runShellScript'
+    name: portAndHeaderScan
+    inputs:
+      runCommand:
+        - '#!/bin/bash'
+        - set -uo pipefail
+        - command -v nmap >/dev/null || (sudo apt-get update -y && sudo apt-get install -y nmap)
+        - TS=$(date +%Y%m%dT%H%M%SZ)
+        - OUT="/tmp/scan-$TS.txt"
+        - echo "== nmap {{ TargetHost }} ==" | tee "$OUT"
+        - 'nmap -Pn -p 22,80,443,3306,5000 "{{ TargetHost }}" | tee -a "$OUT" || true'
+        - echo "== HTTP headers ==" | tee -a "$OUT"
+        - 'curl -sI "http://{{ TargetHost }}/" | tee -a "$OUT" || true'
+        - aws s3 cp "$OUT" "s3://{{ ScanBucket }}/port-web/$TS.txt"
+        - echo "uploaded to s3://{{ ScanBucket }}/port-web/$TS.txt"

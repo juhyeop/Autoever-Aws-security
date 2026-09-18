@@ -1,16 +1,13 @@
-###############################################################################
-# 인스턴스 IAM — 설계문서의 "읽기 전용 / 실행 전용 역할 분리" 그대로 구현
+############################################
+# EC2 IAM 역할
 #
-#   base      : 전 인스턴스 공통. SSM Session Manager 접속 + CloudWatch Agent 지표 전송.
-#   dashboard : base + (1) 탐지 결과 읽기 전용  (2) 승인된 플레이북만 실행
-#
-# 읽기와 실행을 분리해 둔 이유: 대시보드 코드에 버그가 있어도 조회 화면 때문에
-# 의도치 않은 조치가 실행되지 않게 하기 위함입니다.
-###############################################################################
+# 설계 포인트: 대시보드 역할은 '읽기 전용 정책'과
+# 'ASR-* 실행 전용 정책'을 분리해서 붙입니다.
+# 대시보드 코드에 버그가 있어도 조회 화면 때문에 조치가 실행되지 않습니다.
+############################################
 
 data "aws_iam_policy_document" "ec2_assume" {
   statement {
-    effect  = "Allow"
     actions = ["sts:AssumeRole"]
     principals {
       type        = "Service"
@@ -19,94 +16,168 @@ data "aws_iam_policy_document" "ec2_assume" {
   }
 }
 
-###############################################################################
-# 공통 역할
-###############################################################################
+locals {
+  ssm_core_policy = "arn:${var.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  cw_agent_policy = "arn:${var.partition}:iam::aws:policy/CloudWatchAgentServerPolicy"
 
-resource "aws_iam_role" "base" {
-  name               = "${var.name_prefix}-ec2-base"
+  secret_arn_prefix = "arn:${var.partition}:secretsmanager:${var.region}:${var.account_id}:secret:${var.name_prefix}/*"
+  scan_bucket_arn   = "arn:${var.partition}:s3:::${var.scan_results_bucket}"
+
+  asr_document_arn        = "arn:${var.partition}:ssm:${var.region}:${var.account_id}:automation-definition/ASR-*"
+  ssm_automation_role_arn = "arn:${var.partition}:iam::${var.account_id}:role/${var.ssm_automation_role_name}"
+
+  dynamodb_table_arns = [
+    "arn:${var.partition}:dynamodb:${var.region}:${var.account_id}:table/${var.correlated_findings_table}",
+    "arn:${var.partition}:dynamodb:${var.region}:${var.account_id}:table/${var.remediation_actions_table}",
+  ]
+}
+
+############################################
+# 공통 — 점검 결과 업로드 정책
+############################################
+
+data "aws_iam_policy_document" "scan_upload" {
+  statement {
+    sid       = "PutScanResults"
+    actions   = ["s3:PutObject", "s3:PutObjectAcl"]
+    resources = ["${local.scan_bucket_arn}/*"]
+  }
+
+  statement {
+    sid       = "ListScanBucket"
+    actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
+    resources = [local.scan_bucket_arn]
+  }
+}
+
+resource "aws_iam_policy" "scan_upload" {
+  name        = "${var.name_prefix}-scan-upload"
+  description = "Upload manual scan results (nmap / ZAP / Trivy) to S3"
+  policy      = data.aws_iam_policy_document.scan_upload.json
+
+  tags = var.tags
+}
+
+############################################
+# Docker Host
+############################################
+
+resource "aws_iam_role" "docker_host" {
+  name               = "${var.name_prefix}-docker-host-role"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
+  tags               = var.tags
 }
 
-# SSM Session Manager로 접속하기 위한 관리형 정책 (키페어 없이도 셸 접속 가능)
-resource "aws_iam_role_policy_attachment" "base_ssm" {
-  role       = aws_iam_role.base.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+resource "aws_iam_role_policy_attachment" "docker_host_ssm" {
+  role       = aws_iam_role.docker_host.name
+  policy_arn = local.ssm_core_policy
 }
 
-# CloudWatch Agent가 메모리/디스크 지표를 올리기 위한 관리형 정책
-resource "aws_iam_role_policy_attachment" "base_cw_agent" {
-  role       = aws_iam_role.base.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/CloudWatchAgentServerPolicy"
+resource "aws_iam_role_policy_attachment" "docker_host_cw" {
+  role       = aws_iam_role.docker_host.name
+  policy_arn = local.cw_agent_policy
 }
 
-resource "aws_iam_instance_profile" "base" {
-  name = "${var.name_prefix}-ec2-base"
-  role = aws_iam_role.base.name
+resource "aws_iam_role_policy_attachment" "docker_host_scan" {
+  role       = aws_iam_role.docker_host.name
+  policy_arn = aws_iam_policy.scan_upload.arn
 }
 
-###############################################################################
-# DB 인스턴스용 역할 — 공통 + Secrets Manager에서 자기 비밀번호만 읽기
-###############################################################################
+data "aws_iam_policy_document" "docker_host" {
+  statement {
+    sid       = "ReadDbSecret"
+    actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+    resources = [local.secret_arn_prefix]
+  }
+
+  statement {
+    sid = "PullFromEcr"
+    actions = [
+      "ecr:GetAuthorizationToken",
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "docker_host" {
+  name   = "${var.name_prefix}-docker-host-policy"
+  role   = aws_iam_role.docker_host.id
+  policy = data.aws_iam_policy_document.docker_host.json
+}
+
+resource "aws_iam_instance_profile" "docker_host" {
+  name = "${var.name_prefix}-docker-host-profile"
+  role = aws_iam_role.docker_host.name
+  tags = var.tags
+}
+
+############################################
+# MySQL EC2
+############################################
 
 resource "aws_iam_role" "db" {
-  name               = "${var.name_prefix}-ec2-db"
+  name               = "${var.name_prefix}-db-role"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
+  tags               = var.tags
 }
 
 resource "aws_iam_role_policy_attachment" "db_ssm" {
   role       = aws_iam_role.db.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  policy_arn = local.ssm_core_policy
 }
 
-resource "aws_iam_role_policy_attachment" "db_cw_agent" {
+resource "aws_iam_role_policy_attachment" "db_cw" {
   role       = aws_iam_role.db.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/CloudWatchAgentServerPolicy"
+  policy_arn = local.cw_agent_policy
 }
 
-data "aws_iam_policy_document" "db_secret_read" {
+data "aws_iam_policy_document" "db" {
   statement {
-    sid       = "ReadOwnDbSecret"
-    effect    = "Allow"
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.mysql_root.arn]
+    sid       = "ReadDbSecret"
+    actions   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+    resources = [local.secret_arn_prefix]
   }
 }
 
-resource "aws_iam_role_policy" "db_secret_read" {
-  name   = "${var.name_prefix}-db-secret-read"
+resource "aws_iam_role_policy" "db" {
+  name   = "${var.name_prefix}-db-policy"
   role   = aws_iam_role.db.id
-  policy = data.aws_iam_policy_document.db_secret_read.json
+  policy = data.aws_iam_policy_document.db.json
 }
 
 resource "aws_iam_instance_profile" "db" {
-  name = "${var.name_prefix}-ec2-db"
+  name = "${var.name_prefix}-db-profile"
   role = aws_iam_role.db.name
+  tags = var.tags
 }
 
-###############################################################################
-# 대시보드 앱 역할 — 읽기 전용 + 실행 전용 분리
-###############################################################################
+############################################
+# 보안 대시보드 — 읽기 / 실행 권한 분리
+############################################
 
 resource "aws_iam_role" "dashboard" {
-  name               = "${var.name_prefix}-ec2-dashboard"
+  name               = "${var.name_prefix}-dashboard-role"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
+  tags               = var.tags
 }
 
 resource "aws_iam_role_policy_attachment" "dashboard_ssm" {
   role       = aws_iam_role.dashboard.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  policy_arn = local.ssm_core_policy
 }
 
-resource "aws_iam_role_policy_attachment" "dashboard_cw_agent" {
+resource "aws_iam_role_policy_attachment" "dashboard_cw" {
   role       = aws_iam_role.dashboard.name
-  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/CloudWatchAgentServerPolicy"
+  policy_arn = local.cw_agent_policy
 }
 
-data "aws_iam_policy_document" "dashboard_read_only" {
+# (1) 읽기 전용 — finding 과 조치 이력 조회
+data "aws_iam_policy_document" "dashboard_read" {
   statement {
-    sid    = "ReadOnlyDetection"
-    effect = "Allow"
+    sid = "ReadFindings"
     actions = [
       "securityhub:GetFindings",
       "securityhub:DescribeHub",
@@ -117,71 +188,168 @@ data "aws_iam_policy_document" "dashboard_read_only" {
       "inspector2:ListCoverage",
       "config:DescribeComplianceByConfigRule",
       "config:GetComplianceDetailsByConfigRule",
-      "access-analyzer:ListAnalyzers",
+      "config:DescribeConfigRules",
       "access-analyzer:ListFindings",
-      "cloudwatch:GetMetricStatistics",
-      "cloudwatch:GetMetricData",
-      "cloudwatch:DescribeAlarms",
-      "ec2:DescribeInstances",
-      "ec2:DescribeSecurityGroups",
+      "access-analyzer:ListAnalyzers",
     ]
-    # 이 API들은 리소스 단위 제한을 지원하지 않아 "*" 를 씁니다.
-    # 대신 전부 읽기 전용 동작만 골라 넣었습니다.
     resources = ["*"]
+  }
+
+  statement {
+    sid = "ReadInfrastructureState"
+    actions = [
+      "ec2:DescribeSecurityGroups",
+      "ec2:DescribeSecurityGroupRules",
+      "ec2:DescribeInstances",
+      "ec2:DescribeNetworkAcls",
+      "cloudwatch:GetMetricData",
+      "cloudwatch:GetMetricStatistics",
+      "cloudwatch:DescribeAlarms",
+      "logs:FilterLogEvents",
+      "logs:StartQuery",
+      "logs:GetQueryResults",
+      "cloudtrail:LookupEvents",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "ReadCorrelationAndActionHistory"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:Query",
+      "dynamodb:Scan",
+      "dynamodb:DescribeTable",
+    ]
+    resources = local.dynamodb_table_arns
+  }
+
+  statement {
+    sid       = "ReadScanResults"
+    actions   = ["s3:GetObject", "s3:ListBucket"]
+    resources = [local.scan_bucket_arn, "${local.scan_bucket_arn}/*"]
   }
 }
 
-resource "aws_iam_role_policy" "dashboard_read_only" {
-  name   = "${var.name_prefix}-dashboard-readonly"
-  role   = aws_iam_role.dashboard.id
-  policy = data.aws_iam_policy_document.dashboard_read_only.json
+resource "aws_iam_policy" "dashboard_read" {
+  name        = "${var.name_prefix}-dashboard-read"
+  description = "Dashboard read-only access to findings and action history"
+  policy      = data.aws_iam_policy_document.dashboard_read.json
+  tags        = var.tags
 }
 
+resource "aws_iam_role_policy_attachment" "dashboard_read" {
+  role       = aws_iam_role.dashboard.name
+  policy_arn = aws_iam_policy.dashboard_read.arn
+}
+
+# (2) 실행 전용 — ASR-* 플레이북만 실행할 수 있습니다.
 data "aws_iam_policy_document" "dashboard_execute" {
   statement {
-    sid    = "RunApprovedPlaybooksOnly"
-    effect = "Allow"
-    actions = [
-      "ssm:StartAutomationExecution",
-      "ssm:GetAutomationExecution",
-    ]
-    # ASR-* 로 시작하는 승인된 플레이북만 실행 가능.
-    resources = [
-      "arn:${data.aws_partition.current.partition}:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:automation-definition/${var.automation_document_prefix}*",
-      "arn:${data.aws_partition.current.partition}:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:document/${var.automation_document_prefix}*",
-      "arn:${data.aws_partition.current.partition}:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:automation-execution/*",
-    ]
+    sid       = "RunApprovedPlaybooksOnly"
+    actions   = ["ssm:StartAutomationExecution"]
+    resources = [local.asr_document_arn]
   }
 
   statement {
-    sid       = "DescribeAutomationExecutions"
-    effect    = "Allow"
-    actions   = ["ssm:DescribeAutomationExecutions"]
+    sid = "TrackExecution"
+    actions = [
+      "ssm:GetAutomationExecution",
+      "ssm:DescribeAutomationExecutions",
+      "ssm:DescribeAutomationStepExecutions",
+    ]
     resources = ["*"]
   }
 
-  # 대시보드가 SSM Automation 을 실행할 때 automation 역할을 넘겨야 하므로 PassRole 필요.
-  # 넘길 수 있는 대상은 이 프로젝트의 SSM automation 역할 하나로 제한한다.
   statement {
     sid       = "PassAutomationRole"
-    effect    = "Allow"
     actions   = ["iam:PassRole"]
-    resources = ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/${var.name_prefix}-ssm-automation"]
+    resources = [local.ssm_automation_role_arn]
+
     condition {
       test     = "StringEquals"
       variable = "iam:PassedToService"
       values   = ["ssm.amazonaws.com"]
     }
   }
+
+  statement {
+    sid       = "RecordActionHistory"
+    actions   = ["dynamodb:PutItem", "dynamodb:UpdateItem"]
+    resources = ["arn:${var.partition}:dynamodb:${var.region}:${var.account_id}:table/${var.remediation_actions_table}"]
+  }
 }
 
-resource "aws_iam_role_policy" "dashboard_execute" {
-  name   = "${var.name_prefix}-dashboard-execute"
-  role   = aws_iam_role.dashboard.id
-  policy = data.aws_iam_policy_document.dashboard_execute.json
+resource "aws_iam_policy" "dashboard_execute" {
+  name        = "${var.name_prefix}-dashboard-execute"
+  description = "Dashboard may only start ASR-* automation documents"
+  policy      = data.aws_iam_policy_document.dashboard_execute.json
+  tags        = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "dashboard_execute" {
+  role       = aws_iam_role.dashboard.name
+  policy_arn = aws_iam_policy.dashboard_execute.arn
 }
 
 resource "aws_iam_instance_profile" "dashboard" {
-  name = "${var.name_prefix}-ec2-dashboard"
+  name = "${var.name_prefix}-dashboard-profile"
   role = aws_iam_role.dashboard.name
+  tags = var.tags
+}
+
+############################################
+# DVWA 웹 서버 / 내부 공격용 EC2
+############################################
+
+resource "aws_iam_role" "web_dvwa" {
+  count              = var.enable_dvwa_instance ? 1 : 0
+  name               = "${var.name_prefix}-web-dvwa-role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "web_dvwa_ssm" {
+  count      = var.enable_dvwa_instance ? 1 : 0
+  role       = aws_iam_role.web_dvwa[0].name
+  policy_arn = local.ssm_core_policy
+}
+
+resource "aws_iam_role_policy_attachment" "web_dvwa_cw" {
+  count      = var.enable_dvwa_instance ? 1 : 0
+  role       = aws_iam_role.web_dvwa[0].name
+  policy_arn = local.cw_agent_policy
+}
+
+resource "aws_iam_instance_profile" "web_dvwa" {
+  count = var.enable_dvwa_instance ? 1 : 0
+  name  = "${var.name_prefix}-web-dvwa-profile"
+  role  = aws_iam_role.web_dvwa[0].name
+  tags  = var.tags
+}
+
+resource "aws_iam_role" "attacker" {
+  count              = var.enable_attacker_instance ? 1 : 0
+  name               = "${var.name_prefix}-attacker-role"
+  assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "attacker_ssm" {
+  count      = var.enable_attacker_instance ? 1 : 0
+  role       = aws_iam_role.attacker[0].name
+  policy_arn = local.ssm_core_policy
+}
+
+resource "aws_iam_role_policy_attachment" "attacker_scan" {
+  count      = var.enable_attacker_instance ? 1 : 0
+  role       = aws_iam_role.attacker[0].name
+  policy_arn = aws_iam_policy.scan_upload.arn
+}
+
+resource "aws_iam_instance_profile" "attacker" {
+  count = var.enable_attacker_instance ? 1 : 0
+  name  = "${var.name_prefix}-attacker-profile"
+  role  = aws_iam_role.attacker[0].name
+  tags  = var.tags
 }
