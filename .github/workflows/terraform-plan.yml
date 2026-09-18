@@ -8,7 +8,7 @@ on:
     paths: ['aws-soar-terraform/**.tf', 'aws-soar-terraform/**.tftpl', '.github/workflows/terraform-plan.yml']
   push:
     branches: [main]
-    paths: ['aws-soar-terraform/**.tf', 'aws-soar-terraform/**.tftpl']
+    paths: ['aws-soar-terraform/**.tf', 'aws-soar-terraform/**.tftpl', '.github/workflows/terraform-plan.yml']
   workflow_dispatch:
 
 permissions:
