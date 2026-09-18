@@ -5,10 +5,8 @@ name: terraform plan
 # 앞의 두 단계를 자동화하고, 마지막 apply 는 사람에게 남겨둔 형태입니다.
 on:
   pull_request:
-    paths: ['aws-soar-terraform/**.tf', 'aws-soar-terraform/**.tftpl', '.github/workflows/terraform-plan.yml']
   push:
     branches: [main]
-    paths: ['aws-soar-terraform/**.tf', 'aws-soar-terraform/**.tftpl', '.github/workflows/terraform-plan.yml']
   workflow_dispatch:
 
 permissions:
